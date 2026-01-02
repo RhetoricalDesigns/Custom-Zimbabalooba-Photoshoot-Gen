@@ -18,19 +18,21 @@ export const generateModelFit = async (
     pose: string, 
     background: string, 
     aspectRatio: "1:1" | "3:4" | "4:3" | "9:16" | "16:9",
-    customInstructions?: string
+    customInstructions?: string,
+    usePro: boolean
   }
 ): Promise<string> => {
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
-    throw new Error("API_KEY environment variable is not configured.");
+    throw new Error("API configuration missing. Please ensure your key is set.");
   }
 
   const ai = new GoogleGenAI({ apiKey });
   const { mimeType, data } = getBase64Parts(base64Image);
   const prompt = MODEL_SHOT_PROMPT(config);
   
-  const modelName = 'gemini-2.5-flash-image';
+  // Use Pro model only if requested, otherwise fallback to Flash for higher standard limits
+  const modelName = config.usePro ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
   
   try {
     const response = await ai.models.generateContent({
@@ -43,7 +45,8 @@ export const generateModelFit = async (
       },
       config: {
         imageConfig: {
-          aspectRatio: config.aspectRatio
+          aspectRatio: config.aspectRatio,
+          ...(config.usePro ? { imageSize: "1K" } : {})
         }
       }
     });
@@ -60,10 +63,7 @@ export const generateModelFit = async (
   } catch (error: any) {
     console.error("Gemini API Error:", error);
     if (error.message?.includes('RESOURCE_EXHAUSTED')) {
-      throw new Error("Free tier limit reached or service is busy. Please try again in a moment.");
-    }
-    if (error.status === 401 || error.status === 403 || error.message?.includes('API_KEY_INVALID') || error.message?.includes('401')) {
-      throw new Error("API_KEY is invalid or unauthorized. Please verify your credentials.");
+      throw new Error("Free tier limit reached. Please switch to Pro Mode or try again in a moment.");
     }
     throw new Error(error.message || "Generation failed.");
   }
@@ -71,16 +71,15 @@ export const generateModelFit = async (
 
 export const editGeneratedImage = async (
   base64Image: string,
-  editPrompt: string
+  editPrompt: string,
+  usePro: boolean
 ): Promise<string> => {
   const apiKey = process.env.API_KEY;
-  if (!apiKey) {
-    throw new Error("API_KEY environment variable is not configured.");
-  }
+  if (!apiKey) throw new Error("API_KEY required.");
 
   const ai = new GoogleGenAI({ apiKey });
   const { mimeType, data } = getBase64Parts(base64Image);
-  const modelName = 'gemini-2.5-flash-image';
+  const modelName = usePro ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
 
   const instruction = `
     Edit this photoshoot: "${editPrompt}".
@@ -96,6 +95,11 @@ export const editGeneratedImage = async (
           { text: instruction },
         ],
       },
+      config: {
+        imageConfig: {
+          ...(usePro ? { imageSize: "1K" } : {})
+        }
+      }
     });
 
     const candidate = response.candidates?.[0];
@@ -106,11 +110,8 @@ export const editGeneratedImage = async (
       }
     }
 
-    throw new Error("Editing completed but no image was returned.");
+    throw new Error("Editing failed.");
   } catch (error: any) {
-    if (error.status === 401 || error.status === 403 || error.message?.includes('401')) {
-      throw new Error("API_KEY is invalid or unauthorized.");
-    }
     throw new Error(error.message || "Editing failed.");
   }
 };

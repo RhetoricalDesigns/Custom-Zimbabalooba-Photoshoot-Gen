@@ -1,11 +1,26 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import ImageUploader from './components/ImageUploader';
 import FittingControls from './components/FittingControls';
 import { generateModelFit, editGeneratedImage } from './services/geminiService';
 import { FittingConfig, GenerationState } from './types';
 
+// Extend the global Window interface with the expected AIStudio type to resolve declaration conflicts.
+declare global {
+  interface AIStudio {
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
+  }
+  interface Window {
+    // Made optional to match potential existing global declarations and resolve modifier mismatch errors.
+    aistudio?: AIStudio;
+  }
+}
+
 const App: React.FC = () => {
+  const [isProMode, setIsProMode] = useState<boolean>(false);
+  const [hasProKey, setHasProKey] = useState<boolean>(false);
+  const [checkingKey, setCheckingKey] = useState<boolean>(true);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isImageLoading, setIsImageLoading] = useState(false);
   const [editPrompt, setEditPrompt] = useState('');
@@ -24,59 +39,102 @@ const App: React.FC = () => {
     resultUrl: null,
   });
 
+  useEffect(() => {
+    const checkKey = async () => {
+      try {
+        if (window.aistudio) {
+          const hasKey = await window.aistudio.hasSelectedApiKey();
+          setHasProKey(hasKey);
+        } else {
+          setHasProKey(false);
+        }
+      } catch (e) {
+        setHasProKey(false);
+      } finally {
+        setCheckingKey(false);
+      }
+    };
+    checkKey();
+  }, []);
+
+  const handleOpenKeySelector = async () => {
+    if (window.aistudio) {
+      await window.aistudio.openSelectKey();
+      setHasProKey(true);
+      setIsProMode(true);
+    }
+  };
+
+  const toggleProMode = async (enable: boolean) => {
+    if (enable) {
+      if (!hasProKey) {
+        await handleOpenKeySelector();
+      } else {
+        setIsProMode(true);
+      }
+    } else {
+      setIsProMode(false);
+    }
+  };
+
   const handleGenerate = async () => {
     if (!selectedImage) return;
     
-    // Pre-flight check for API Key
-    if (!process.env.API_KEY) {
-      setState({ 
-        isGenerating: false, 
-        isEditing: false, 
-        error: "Configuration Missing: The API_KEY environment variable is not set. Please configure it in your deployment settings.", 
-        resultUrl: null 
-      });
-      return;
-    }
-
     setState({ isGenerating: true, isEditing: false, error: null, resultUrl: null });
     setIsImageLoading(false);
     
     try {
-      const result = await generateModelFit(selectedImage, fittingConfig);
+      const result = await generateModelFit(selectedImage, { ...fittingConfig, usePro: isProMode });
       setState({ isGenerating: false, isEditing: false, error: null, resultUrl: result });
       setIsImageLoading(true);
     } catch (err: any) {
       console.error("Generate Error:", err);
-      let errorMessage = err.message;
-      if (err.message?.includes("API_KEY") || err.message?.includes("401") || err.message?.includes("403")) {
-        errorMessage = "Invalid Credentials: The provided API key is invalid, expired, or restricted. Please check your Google AI Studio settings and environment variables.";
+      if (err.message?.includes('Requested entity was not found.')) {
+        setHasProKey(false);
+        if (window.aistudio) {
+          await window.aistudio.openSelectKey();
+        }
       }
-      setState({ isGenerating: false, isEditing: false, error: errorMessage, resultUrl: null });
+      setState({ isGenerating: false, isEditing: false, error: err.message, resultUrl: null });
     }
   };
 
   const handleEdit = async () => {
     if (!state.resultUrl || !editPrompt.trim()) return;
     
-    if (!process.env.API_KEY) {
-      setState(prev => ({ ...prev, error: "Configuration Missing: API_KEY environment variable required for editing." }));
-      return;
-    }
-
     setState(prev => ({ ...prev, isEditing: true, error: null }));
     setIsImageLoading(false);
     try {
-      const result = await editGeneratedImage(state.resultUrl, editPrompt);
+      const result = await editGeneratedImage(state.resultUrl, editPrompt, isProMode);
       setState({ isGenerating: false, isEditing: false, error: null, resultUrl: result });
       setIsImageLoading(true);
       setEditPrompt('');
     } catch (err: any) {
-      let errorMessage = err.message;
-      if (err.message?.includes("401") || err.message?.includes("403")) {
-        errorMessage = "Authentication failed. Your API key may have expired or is invalid.";
+      console.error("Edit Error:", err);
+      if (err.message?.includes('Requested entity was not found.')) {
+        setHasProKey(false);
+        if (window.aistudio) {
+          await window.aistudio.openSelectKey();
+        }
       }
-      setState(prev => ({ ...prev, isEditing: false, error: errorMessage }));
+      setState(prev => ({ ...prev, isEditing: false, error: err.message }));
     }
+  };
+
+  const handleDownload = () => {
+    if (state.resultUrl) {
+      const link = document.createElement('a');
+      link.href = state.resultUrl;
+      link.download = `zimbabalooba-shoot-${Date.now()}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  };
+
+  const handleClearPreview = () => {
+    setState(prev => ({ ...prev, resultUrl: null }));
+    setEditPrompt('');
   };
 
   return (
@@ -88,21 +146,32 @@ const App: React.FC = () => {
               ZIMBABALOOBA
             </h1>
             <p className="text-[10px] text-zimbabalooba-teal font-extrabold uppercase tracking-[0.2em] mt-1">
-              Photoshoot Studio
+              Studio: <span className={isProMode ? 'text-zimbabalooba-orange' : 'text-emerald-500'}>{isProMode ? 'PRO LEVEL' : 'STANDARD (FREE)'}</span>
             </p>
           </div>
           
-          <div className="hidden md:flex items-center gap-3">
-             <div className={`px-4 py-2 rounded-full border text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 transition-colors ${process.env.API_KEY ? 'border-emerald-100 bg-emerald-50 text-emerald-600' : 'border-amber-100 bg-amber-50 text-amber-600'}`}>
-                <i className={`fa-solid ${process.env.API_KEY ? 'fa-circle-check' : 'fa-triangle-exclamation'}`}></i>
-                Studio Status: {process.env.API_KEY ? 'Connected' : 'Setup Required'}
-             </div>
+          <div className="flex items-center gap-4">
+            <div className="hidden sm:flex bg-gray-100 p-1 rounded-full border border-gray-200">
+              <button 
+                onClick={() => toggleProMode(false)}
+                className={`px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${!isProMode ? 'bg-white shadow-sm text-zimbabalooba-teal' : 'text-gray-400 hover:text-gray-600'}`}
+              >
+                Standard
+              </button>
+              <button 
+                onClick={() => toggleProMode(true)}
+                className={`px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${isProMode ? 'bg-zimbabalooba-orange shadow-sm text-white' : 'text-gray-400 hover:text-gray-600'}`}
+              >
+                Pro
+              </button>
+            </div>
           </div>
         </div>
       </header>
 
       <main className="flex-1 max-w-7xl mx-auto w-full p-4 md:p-10 grid grid-cols-1 lg:grid-cols-12 gap-8 md:gap-10">
         <div className="lg:col-span-4 space-y-6">
+          {/* Section 1: Input */}
           <div className="bg-white p-6 rounded-3xl shadow-xl shadow-zimbabalooba-teal/5 border border-gray-50">
             <h3 className="text-xs font-black text-zimbabalooba-teal uppercase tracking-widest mb-4 flex items-center">
               <i className="fa-solid fa-shirt mr-2"></i>
@@ -111,12 +180,55 @@ const App: React.FC = () => {
             <ImageUploader onImageSelected={setSelectedImage} selectedImage={selectedImage} />
           </div>
 
+          {/* Section 2: Parameters */}
           <div className="bg-white p-6 rounded-3xl shadow-xl shadow-zimbabalooba-teal/5 border border-gray-50">
             <h3 className="text-xs font-black text-zimbabalooba-teal uppercase tracking-widest mb-4 flex items-center">
               <i className="fa-solid fa-sliders mr-2"></i>
               2. Shot Parameters
             </h3>
             <FittingControls config={fittingConfig} onChange={setFittingConfig} />
+          </div>
+
+          {/* Section 3: Key Toggle (Explicitly Choosing Key Source) */}
+          <div className="bg-white p-6 rounded-3xl shadow-xl shadow-zimbabalooba-teal/5 border border-gray-50">
+            <h3 className="text-xs font-black text-zimbabalooba-teal uppercase tracking-widest mb-4 flex items-center">
+              <i className="fa-solid fa-key mr-2"></i>
+              3. Studio Access
+            </h3>
+            <div className="space-y-4">
+              <div className="flex bg-gray-50 p-1.5 rounded-2xl border border-gray-100">
+                <button 
+                  onClick={() => toggleProMode(false)}
+                  className={`flex-1 py-3 px-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${!isProMode ? 'bg-white shadow-md text-zimbabalooba-teal border border-gray-100' : 'text-gray-400 hover:text-gray-600'}`}
+                >
+                  <i className="fa-solid fa-user-group mb-1 block text-xs"></i>
+                  Shared (Free)
+                </button>
+                <button 
+                  onClick={() => toggleProMode(true)}
+                  className={`flex-1 py-3 px-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${isProMode ? 'bg-zimbabalooba-orange shadow-md text-white border border-zimbabalooba-orange' : 'text-gray-400 hover:text-gray-600'}`}
+                >
+                  <i className="fa-solid fa-crown mb-1 block text-xs"></i>
+                  Personal (Pro)
+                </button>
+              </div>
+              
+              <div className="px-1">
+                <p className="text-[10px] text-gray-400 font-medium leading-relaxed">
+                  {isProMode 
+                    ? "Currently using your billable Google Cloud Project for high-definition 1K output." 
+                    : "Using shared application quota. Recommended for quick tests."}
+                </p>
+                {isProMode && (
+                  <button 
+                    onClick={handleOpenKeySelector}
+                    className="mt-3 text-[9px] font-black text-zimbabalooba-teal uppercase tracking-widest flex items-center gap-1 hover:underline"
+                  >
+                    <i className="fa-solid fa-arrows-rotate"></i> Change Pro Key
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
 
           <button
@@ -131,7 +243,7 @@ const App: React.FC = () => {
           >
             {state.isGenerating ? (
               <span className="flex items-center justify-center">
-                <i className="fa-solid fa-spinner fa-spin mr-3"></i> Developing...
+                <i className="fa-solid fa-spinner fa-spin mr-3"></i> {isProMode ? 'Pro Developing...' : 'Processing...'}
               </span>
             ) : "Capture Photoshoot"}
           </button>
@@ -143,13 +255,25 @@ const App: React.FC = () => {
               <div className="flex items-center space-x-3">
                 <div className={`w-3 h-3 rounded-full ${state.resultUrl ? 'bg-zimbabalooba-orange shadow-[0_0_10px_rgba(255,176,0,0.5)] animate-pulse' : 'bg-gray-200'}`}></div>
                 <h2 className="text-xs font-black text-zimbabalooba-teal uppercase tracking-[0.2em]">
-                  Darkroom Preview
+                  {isProMode ? 'PRO DARKROOM PREVIEW' : 'STANDARD PREVIEW'}
                 </h2>
               </div>
               {state.resultUrl && (
-                <div className="flex space-x-3">
-                  <button onClick={() => { if(state.resultUrl) { const l = document.createElement('a'); l.href=state.resultUrl; l.download='zimbabalooba.png'; l.click(); }}} className="w-10 h-10 flex items-center justify-center bg-white border border-gray-100 hover:border-zimbabalooba-orange rounded-full text-zimbabalooba-teal shadow-sm transition-all hover:scale-105" title="Download"><i className="fa-solid fa-download"></i></button>
-                  <button onClick={() => { setSelectedImage(null); setState(p => ({...p, resultUrl: null})); }} className="w-10 h-10 flex items-center justify-center bg-white border border-gray-100 hover:border-rose-400 rounded-full text-rose-400 shadow-sm transition-all hover:scale-105" title="Reset"><i className="fa-solid fa-rotate-left"></i></button>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={handleDownload}
+                    className="w-9 h-9 flex items-center justify-center bg-zimbabalooba-teal text-white rounded-full shadow-lg hover:bg-zimbabalooba-darkTeal transition-all hover:scale-110 active:scale-95 group"
+                    title="Download Result"
+                  >
+                    <i className="fa-solid fa-download group-hover:animate-bounce"></i>
+                  </button>
+                  <button 
+                    onClick={handleClearPreview}
+                    className="w-9 h-9 flex items-center justify-center bg-white border border-gray-200 text-gray-400 rounded-full shadow-sm hover:text-rose-500 hover:border-rose-100 transition-all hover:scale-110 active:scale-95"
+                    title="Reset Preview"
+                  >
+                    <i className="fa-solid fa-trash-can text-sm"></i>
+                  </button>
                 </div>
               )}
             </div>
@@ -158,9 +282,17 @@ const App: React.FC = () => {
               {state.error && (
                 <div className="bg-white p-10 rounded-[2rem] shadow-2xl max-w-md text-center border-t-4 border-rose-400 z-30 animate-shake">
                   <div className="w-16 h-16 bg-rose-50 text-rose-400 rounded-2xl flex items-center justify-center mx-auto mb-6"><i className="fa-solid fa-shield-halved text-2xl"></i></div>
-                  <h4 className="text-gray-800 font-bold mb-2 uppercase tracking-tighter">Security & Config</h4>
+                  <h4 className="text-gray-800 font-bold mb-2 uppercase tracking-tighter">Studio Alert</h4>
                   <p className="text-gray-500 text-[11px] mb-6 leading-relaxed px-4">{state.error}</p>
-                  <button onClick={() => setState(p => ({...p, error: null}))} className="px-10 py-3 bg-zimbabalooba-teal text-white rounded-full text-[10px] font-bold uppercase tracking-widest hover:bg-zimbabalooba-darkTeal transition-colors shadow-lg shadow-zimbabalooba-teal/20">Dismiss</button>
+                  {state.error.includes("limit reached") && !isProMode && (
+                    <button 
+                      onClick={() => toggleProMode(true)}
+                      className="w-full mb-3 px-10 py-3 bg-zimbabalooba-orange text-white rounded-full text-[10px] font-bold uppercase tracking-widest hover:opacity-90 transition-opacity"
+                    >
+                      Try Pro Mode (Personal Key)
+                    </button>
+                  )}
+                  <button onClick={() => setState(p => ({...p, error: null}))} className="px-10 py-3 bg-gray-100 text-gray-500 rounded-full text-[10px] font-bold uppercase tracking-widest hover:bg-gray-200 transition-colors">Dismiss</button>
                 </div>
               )}
 
@@ -174,10 +306,10 @@ const App: React.FC = () => {
                     </div>
                   </div>
                   <h3 className="text-xl font-brand text-zimbabalooba-teal uppercase tracking-widest mb-2">
-                    {state.isEditing ? 'Refining Shot...' : 'Developing Image...'}
+                    {state.isEditing ? 'Refining Shot...' : 'Processing...'}
                   </h3>
                   <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">
-                    Gemini 2.5 Flash Processing
+                    {isProMode ? 'Gemini 3 Pro Engine' : 'Gemini 2.5 Flash Engine'}
                   </p>
                 </div>
               )}
@@ -193,7 +325,17 @@ const App: React.FC = () => {
                     />
                   </div>
                   
-                  <div className="w-full max-w-xl mt-10">
+                  <div className="w-full max-w-xl mt-8 space-y-4">
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={handleDownload}
+                        className="flex-1 py-4 bg-emerald-500 text-white rounded-2xl font-brand uppercase tracking-widest text-sm shadow-xl shadow-emerald-500/10 hover:bg-emerald-600 transition-all flex items-center justify-center gap-2"
+                      >
+                        <i className="fa-solid fa-cloud-arrow-down"></i>
+                        Download Image
+                      </button>
+                    </div>
+
                     <div className="bg-white/90 backdrop-blur-md p-2 rounded-2xl shadow-2xl border border-zimbabalooba-teal/5 flex items-center gap-3">
                       <div className="pl-4 text-zimbabalooba-teal/40"><i className="fa-solid fa-wand-magic-sparkles"></i></div>
                       <input 
@@ -223,22 +365,16 @@ const App: React.FC = () => {
               {!state.resultUrl && !state.isGenerating && !state.isEditing && !state.error && (
                 <div className="text-center max-w-sm">
                   <div className="w-24 h-24 bg-white rounded-[2rem] shadow-2xl flex items-center justify-center mx-auto mb-8 border border-zimbabalooba-orange/20 rotate-6 hover:rotate-0 transition-transform duration-500">
-                    <i className="fa-solid fa-wand-magic-sparkles text-zimbabalooba-orange text-4xl"></i>
+                    <i className="fa-solid fa-sparkles text-zimbabalooba-orange text-4xl"></i>
                   </div>
-                  <h3 className="text-zimbabalooba-teal font-brand text-2xl uppercase tracking-wider mb-3">Studio Ready</h3>
+                  <h3 className="text-zimbabalooba-teal font-brand text-2xl uppercase tracking-wider mb-3">
+                    {isProMode ? 'Pro Studio Ready' : 'Free Studio Ready'}
+                  </h3>
                   <p className="text-gray-400 text-xs leading-relaxed font-medium px-6">
-                    Professional modeling active via Gemini 2.5 Flash. Upload your hand-dyed cotton pants to begin the photoshoot.
+                    {isProMode 
+                      ? "Ultra-high quality generation with your personal API key limits." 
+                      : "Fast, standard generation using the default shared free tier."}
                   </p>
-                  {!process.env.API_KEY && (
-                    <div className="mt-8 p-5 bg-amber-50 rounded-2xl border border-amber-200 text-left">
-                       <p className="text-[10px] text-amber-800 font-bold uppercase tracking-widest mb-2 flex items-center">
-                         <i className="fa-solid fa-key mr-2"></i> Setup Instructions
-                       </p>
-                       <p className="text-[9px] text-amber-700 font-medium leading-relaxed">
-                         To enable image generation, please add your Gemini API Key as an environment variable named <code className="bg-amber-100 px-1 py-0.5 rounded">API_KEY</code> in your deployment dashboard (e.g., Vercel Project Settings {'&gt;'} Environment Variables).
-                       </p>
-                    </div>
-                  )}
                 </div>
               )}
             </div>
