@@ -21,12 +21,15 @@ export const generateModelFit = async (
     customInstructions?: string
   }
 ): Promise<string> => {
-  // Use the API key from the environment
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    throw new Error("API_KEY environment variable is not configured.");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
   const { mimeType, data } = getBase64Parts(base64Image);
   const prompt = MODEL_SHOT_PROMPT(config);
   
-  // Use Gemini 2.5 Flash for the free tier
   const modelName = 'gemini-2.5-flash-image';
   
   try {
@@ -59,6 +62,9 @@ export const generateModelFit = async (
     if (error.message?.includes('RESOURCE_EXHAUSTED')) {
       throw new Error("Free tier limit reached or service is busy. Please try again in a moment.");
     }
+    if (error.status === 401 || error.status === 403 || error.message?.includes('API_KEY_INVALID') || error.message?.includes('401')) {
+      throw new Error("API_KEY is invalid or unauthorized. Please verify your credentials.");
+    }
     throw new Error(error.message || "Generation failed.");
   }
 };
@@ -67,7 +73,12 @@ export const editGeneratedImage = async (
   base64Image: string,
   editPrompt: string
 ): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    throw new Error("API_KEY environment variable is not configured.");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
   const { mimeType, data } = getBase64Parts(base64Image);
   const modelName = 'gemini-2.5-flash-image';
 
@@ -97,6 +108,9 @@ export const editGeneratedImage = async (
 
     throw new Error("Editing completed but no image was returned.");
   } catch (error: any) {
+    if (error.status === 401 || error.status === 403 || error.message?.includes('401')) {
+      throw new Error("API_KEY is invalid or unauthorized.");
+    }
     throw new Error(error.message || "Editing failed.");
   }
 };

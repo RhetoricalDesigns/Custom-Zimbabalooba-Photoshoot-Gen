@@ -26,6 +26,18 @@ const App: React.FC = () => {
 
   const handleGenerate = async () => {
     if (!selectedImage) return;
+    
+    // Pre-flight check for API Key
+    if (!process.env.API_KEY) {
+      setState({ 
+        isGenerating: false, 
+        isEditing: false, 
+        error: "Configuration Missing: The API_KEY environment variable is not set. Please configure it in your deployment settings.", 
+        resultUrl: null 
+      });
+      return;
+    }
+
     setState({ isGenerating: true, isEditing: false, error: null, resultUrl: null });
     setIsImageLoading(false);
     
@@ -35,10 +47,9 @@ const App: React.FC = () => {
       setIsImageLoading(true);
     } catch (err: any) {
       console.error("Generate Error:", err);
-      // Detailed instruction for environment configuration
       let errorMessage = err.message;
-      if (err.message?.includes("API_KEY") || !process.env.API_KEY) {
-        errorMessage = "Security configuration required: Please set the 'API_KEY' environment variable in your deployment dashboard (e.g., Vercel Project Settings) to enable the Gemini engine.";
+      if (err.message?.includes("API_KEY") || err.message?.includes("401") || err.message?.includes("403")) {
+        errorMessage = "Invalid Credentials: The provided API key is invalid, expired, or restricted. Please check your Google AI Studio settings and environment variables.";
       }
       setState({ isGenerating: false, isEditing: false, error: errorMessage, resultUrl: null });
     }
@@ -46,6 +57,12 @@ const App: React.FC = () => {
 
   const handleEdit = async () => {
     if (!state.resultUrl || !editPrompt.trim()) return;
+    
+    if (!process.env.API_KEY) {
+      setState(prev => ({ ...prev, error: "Configuration Missing: API_KEY environment variable required for editing." }));
+      return;
+    }
+
     setState(prev => ({ ...prev, isEditing: true, error: null }));
     setIsImageLoading(false);
     try {
@@ -54,7 +71,11 @@ const App: React.FC = () => {
       setIsImageLoading(true);
       setEditPrompt('');
     } catch (err: any) {
-      setState(prev => ({ ...prev, isEditing: false, error: err.message }));
+      let errorMessage = err.message;
+      if (err.message?.includes("401") || err.message?.includes("403")) {
+        errorMessage = "Authentication failed. Your API key may have expired or is invalid.";
+      }
+      setState(prev => ({ ...prev, isEditing: false, error: errorMessage }));
     }
   };
 
@@ -137,7 +158,7 @@ const App: React.FC = () => {
               {state.error && (
                 <div className="bg-white p-10 rounded-[2rem] shadow-2xl max-w-md text-center border-t-4 border-rose-400 z-30 animate-shake">
                   <div className="w-16 h-16 bg-rose-50 text-rose-400 rounded-2xl flex items-center justify-center mx-auto mb-6"><i className="fa-solid fa-shield-halved text-2xl"></i></div>
-                  <h4 className="text-gray-800 font-bold mb-2 uppercase tracking-tighter">Security Notice</h4>
+                  <h4 className="text-gray-800 font-bold mb-2 uppercase tracking-tighter">Security & Config</h4>
                   <p className="text-gray-500 text-[11px] mb-6 leading-relaxed px-4">{state.error}</p>
                   <button onClick={() => setState(p => ({...p, error: null}))} className="px-10 py-3 bg-zimbabalooba-teal text-white rounded-full text-[10px] font-bold uppercase tracking-widest hover:bg-zimbabalooba-darkTeal transition-colors shadow-lg shadow-zimbabalooba-teal/20">Dismiss</button>
                 </div>
@@ -214,7 +235,7 @@ const App: React.FC = () => {
                          <i className="fa-solid fa-key mr-2"></i> Setup Instructions
                        </p>
                        <p className="text-[9px] text-amber-700 font-medium leading-relaxed">
-                         To enable image generation, please add your Gemini API Key as an environment variable named <code className="bg-amber-100 px-1 py-0.5 rounded">API_KEY</code> in your deployment dashboard (e.g., Vercel Project Settings > Environment Variables).
+                         To enable image generation, please add your Gemini API Key as an environment variable named <code className="bg-amber-100 px-1 py-0.5 rounded">API_KEY</code> in your deployment dashboard (e.g., Vercel Project Settings {'&gt;'} Environment Variables).
                        </p>
                     </div>
                   )}
